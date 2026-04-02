@@ -49,23 +49,34 @@ questions = [
 ]
 
 psych_states = {
-    "Very Low Stress": (0, 15),
-    "Low Stress": (16, 30),
-    "Moderate Stress": (31, 45),
-    "High Stress": (46, 60),
+    "Very Low Stress":  (0,  15),
+    "Low Stress":       (16, 30),
+    "Moderate Stress":  (31, 45),
+    "High Stress":      (46, 60),
     "Very High Stress": (61, 75),
-    "Severe Stress": (76, 90),
-    "Critical State": (91, 200),
+    "Severe Stress":    (76, 90),
+    "Critical State":   (91, 200),
+}
+
+descriptions = {
+    "Very Low Stress":  "Stable mental state. Excellent preparation habits. No help needed.",
+    "Low Stress":       "Mild tension. Good preparation. Self-care is recommended.",
+    "Moderate Stress":  "Noticeable anxiety. Consider improving study strategies.",
+    "High Stress":      "Elevated anxiety. Advisable to seek academic or psychological support.",
+    "Very High Stress": "Significant distress. Professional help is recommended.",
+    "Severe Stress":    "Urgent psychological intervention needed.",
+    "Critical State":   "Immediate medical or psychological assistance required.",
 }
 
 # ---------------- HELPERS ----------------
 def validate_name(name: str) -> bool:
-    return len(name.strip()) > 0 and not any(c.isdigit() for c in name)
+    import re
+    return bool(re.match(r"^[a-zA-Z][a-zA-Z\-' ]*$", name.strip()))
 
 def validate_dob(dob: str) -> bool:
     try:
-        datetime.strptime(dob, "%Y-%m-%d")
-        return True
+        dt = datetime.strptime(dob.strip(), "%Y-%m-%d")
+        return dt < datetime.now()
     except Exception:
         return False
 
@@ -75,75 +86,137 @@ def interpret_score(score: int) -> str:
             return state
     return "Unknown"
 
-def save_json(filename: str, data: dict):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+# ---------------- SESSION STATE INIT ----------------
+if "stage" not in st.session_state:
+    st.session_state.stage = "info"
+if "user_info" not in st.session_state:
+    st.session_state.user_info = {}
+if "answers_list" not in st.session_state:
+    st.session_state.answers_list = []
+if "total_score" not in st.session_state:
+    st.session_state.total_score = 0
 
-# ---------------- STREAMLIT APP ----------------
+# ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="Exam Preparation & Test Anxiety Survey")
 st.title("📝 Exam Preparation & Test Anxiety Survey")
-st.info("Please fill out your details and answer all questions honestly.")
 
-# --- User Info ---
-name    = st.text_input("Given Name")
-surname = st.text_input("Surname")
-dob     = st.text_input("Date of Birth (YYYY-MM-DD)")
-sid     = st.text_input("Student ID (digits only)")
+# ════════════════════════════════════════════
+# STAGE 1 — User Info
+# ════════════════════════════════════════════
+if st.session_state.stage == "info":
+    st.info("Please fill out your details below, then click **Start Survey**.")
 
-# --- Start Survey ---
-if st.button("Start Survey"):
-    errors = []
-    if not validate_name(name):
-        errors.append("Invalid given name.")
-    if not validate_name(surname):
-        errors.append("Invalid surname.")
-    if not validate_dob(dob):
-        errors.append("Invalid date of birth format. Use YYYY-MM-DD.")
-    if not sid.isdigit():
-        errors.append("Student ID must be digits only.")
+    name    = st.text_input("Given Name",                 value=st.session_state.user_info.get("name", ""))
+    surname = st.text_input("Surname",                    value=st.session_state.user_info.get("surname", ""))
+    dob     = st.text_input("Date of Birth (YYYY-MM-DD)", value=st.session_state.user_info.get("dob", ""))
+    sid     = st.text_input("Student ID (digits only)",   value=st.session_state.user_info.get("sid", ""))
 
-    if errors:
-        for e in errors:
-            st.error(e)
-    else:
-        st.success("All inputs are valid. Proceed to answer the questions below.")
+    if st.button("Start Survey"):
+        errors = []
+        if not validate_name(name):
+            errors.append("Invalid given name — only letters, hyphens, apostrophes and spaces allowed.")
+        if not validate_name(surname):
+            errors.append("Invalid surname — only letters, hyphens, apostrophes and spaces allowed.")
+        if not validate_dob(dob):
+            errors.append("Invalid date of birth. Use YYYY-MM-DD format with a past date.")
+        if not sid.strip().isdigit():
+            errors.append("Student ID must contain digits only.")
 
-        total_score = 0
-        answers = []
+        if errors:
+            for e in errors:
+                st.error(e)
+        else:
+            st.session_state.user_info = {
+                "name":    name.strip(),
+                "surname": surname.strip(),
+                "dob":     dob.strip(),
+                "sid":     sid.strip(),
+            }
+            st.session_state.stage = "survey"
+            st.rerun()
 
+# ════════════════════════════════════════════
+# STAGE 2 — Survey (all questions in one form)
+# ════════════════════════════════════════════
+elif st.session_state.stage == "survey":
+    info = st.session_state.user_info
+    st.success(f"Welcome, {info['name']} {info['surname']}! Answer all {len(questions)} questions and click Submit.")
+    st.markdown("---")
+
+    with st.form("survey_form"):
+        form_answers = {}
         for idx, q in enumerate(questions):
             opt_labels = [opt[0] for opt in q["opts"]]
-            choice = st.selectbox(f"Q{idx+1}. {q['q']}", opt_labels, key=f"q{idx}")
-            score = next(s for label, s in q["opts"] if label == choice)
+            choice = st.radio(
+                f"**Q{idx+1}.** {q['q']}",
+                opt_labels,
+                key=f"q_{idx}",
+                index=0,
+            )
+            form_answers[idx] = choice
+
+        submitted = st.form_submit_button("✅ Submit Survey")
+
+    if submitted:
+        answers_list = []
+        total_score  = 0
+        for idx, q in enumerate(questions):
+            chosen_label = form_answers[idx]
+            score = next(s for label, s in q["opts"] if label == chosen_label)
             total_score += score
-            answers.append({
-                "question": q["q"],
-                "selected_option": choice,
-                "score": score,
+            answers_list.append({
+                "question":        q["q"],
+                "selected_option": chosen_label,
+                "score":           score,
             })
+        st.session_state.answers_list = answers_list
+        st.session_state.total_score  = total_score
+        st.session_state.stage        = "results"
+        st.rerun()
 
-        status = interpret_score(total_score)
+# ════════════════════════════════════════════
+# STAGE 3 — Results
+# ════════════════════════════════════════════
+elif st.session_state.stage == "results":
+    info        = st.session_state.user_info
+    total_score = st.session_state.total_score
+    answers     = st.session_state.answers_list
+    status      = interpret_score(total_score)
 
-        st.markdown(f"## ✅ Your Result: {status}")
-        st.markdown(f"**Total Score:** {total_score}")
+    st.balloons()
+    st.markdown(f"## ✅ Result for {info['name']} {info['surname']}")
+    st.markdown(f"**Total Score:** {total_score} / {len(questions) * 4}")
+    st.markdown(f"**Psychological State:** `{status}`")
+    st.info(descriptions.get(status, ""))
+    st.markdown("---")
 
-        record = {
-            "name": name,
-            "surname": surname,
-            "dob": dob,
-            "student_id": sid,
-            "total_score": total_score,
-            "result": status,
-            "answers": answers,
-            "version": version_float,
-        }
+    record = {
+        "name":        info["name"],
+        "surname":     info["surname"],
+        "dob":         info["dob"],
+        "student_id":  info["sid"],
+        "total_score": total_score,
+        "max_score":   len(questions) * 4,
+        "result":      status,
+        "answers":     answers,
+        "version":     version_float,
+        "date_taken":  datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
 
-        json_filename = f"{sid}_result.json"
-        save_json(json_filename, record)
+    st.download_button(
+        label="⬇️ Download your result (JSON)",
+        data=json.dumps(record, indent=2),
+        file_name=f"{info['sid']}_result.json",
+        mime="application/json",
+    )
 
-        st.success(f"Your results are saved as {json_filename}")
-        st.download_button(
-            "Download your result JSON",
-            json.dumps(record, indent=2),
-            file_name=json_filename,
-        )
+    with st.expander("📋 View detailed answers"):
+        for i, a in enumerate(answers, 1):
+            st.markdown(f"**Q{i}.** {a['question']}")
+            st.markdown(f"→ {a['selected_option']} *(score: {a['score']})*")
+
+    st.markdown("---")
+    if st.button("🔄 Start a new survey"):
+        for key in ["stage", "user_info", "answers_list", "total_score"]:
+            st.session_state.pop(key, None)
+        st.rerun()
